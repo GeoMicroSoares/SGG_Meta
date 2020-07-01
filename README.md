@@ -7,7 +7,9 @@
 ```nano .megarc```
 
 `[Login]
+
 Username = xxxxx@gmail.com
+
 Password = xxxxx`
 
 ### Check out MEGA cloud directories
