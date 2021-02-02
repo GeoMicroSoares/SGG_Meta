@@ -1,0 +1,235 @@
+---
+title: "SGG_Meta"
+author: "André Soares"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    theme: lumen
+    highlight: tango
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(phyloseq)
+library(speedyseq)
+library(decontam)
+library(data.table)
+library(hablar)
+```
+
+### Import kaiju metagenomes data
+
+```{r warning=FALSE}
+S1 = read.csv(file="S1-1-genus.kaijuReport", sep="\t")
+S2 = read.csv(file="S2-1-genus.kaijuReport", sep="\t")
+S3 = read.csv(file="S3-1-genus.kaijuReport", sep="\t")
+S4 = read.csv(file="S4-1-genus.kaijuReport", sep="\t")
+S5 = read.csv(file="S5-1-genus.kaijuReport", sep="\t")
+S6 = read.csv(file="S6-1-genus.kaijuReport", sep="\t")
+S7 = read.csv(file="S7-1-genus.kaijuReport", sep="\t")
+S8 = read.csv(file="S8-1-genus.kaijuReport", sep="\t")
+S9 = read.csv(file="S9-1-genus.kaijuReport", sep="\t")
+
+S1 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S1")
+S2 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S2")
+S3 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S3")
+April = bind_rows(S1, S2, S3) %>% 
+  add_column(month = "April")
+
+S4 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S4")
+S5 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S5")
+S6 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S6")
+
+August = bind_rows(S4, S5, S6) %>% 
+  add_column(month = "August")
+
+S7 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S7")
+S8 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S8")
+S9 %<>% 
+  drop_na() %>% 
+  rename(percent = X.) %>%
+  add_column(sample = "S9")
+
+December = bind_rows(S7, S8, S9) %>% 
+  add_column(month = "December")
+
+metag = bind_rows(April, August, December) %>%
+  filter(genus != "unclassified") %>% 
+  mutate(percent = as.numeric(as.character(percent))) %>% 
+  mutate(genus = replace(genus, percent <= 3, "Other <3%")) %>% 
+  select(-reads) %>% 
+  mutate(sample = sub("S1", "SGG_19", sample)) %>%
+  mutate(sample = sub("S2", "SGG_20", sample)) %>% 
+  mutate(sample = sub("S3", "SGG_21", sample)) %>% 
+  mutate(sample = sub("S4", "SGG_76", sample)) %>% 
+  mutate(sample = sub("S5", "SGG_77", sample)) %>% 
+  mutate(sample = sub("S6", "SGG_78", sample)) %>% 
+  mutate(sample = sub("S7", "SGG_103", sample)) %>% 
+  mutate(sample = sub("S8", "SGG_104", sample)) %>% 
+  mutate(sample = sub("S9", "SGG_105", sample)) %>% 
+  mutate(genus = sub("cannot be assigned to a genus ", "Unclassified", genus)) %>% 
+  mutate(genus = sub("belong to a genus with less than 0.5% of all reads", "Other <3%", genus)) %>% 
+  as_tibble()
+```
+
+### Import 16S data
+
+```{r}
+SGG_SVt = readRDS("seqtab_final.rds")
+sgg_metadata<-read.csv("SGG_hydro_and_geochemistry_v3_tidy_mM_wctls.csv", header=TRUE)
+SGG_Tax = readRDS("tax_final_s132.rds")
+
+order<-rownames(SGG_SVt)
+sgg_metadata_ord<-sgg_metadata[match(order, sgg_metadata$Sample_Code),]
+rownames(sgg_metadata_ord) <- sgg_metadata_ord$Sample_Code
+ps <- phyloseq(otu_table(SGG_SVt, taxa_are_rows=FALSE),
+               sample_data(sgg_metadata_ord), 
+               tax_table(SGG_Tax))
+ps.a = subset_samples(ps, Site.name != "Taff's Well PUMPED")
+
+sample_data(ps.a)$is.neg <- sample_data(ps.a)$Sample_type == "Control"
+contamdf.prev <- isContaminant(ps.a, method="prevalence", threshold = 0.5,
+                               neg="is.neg")
+
+ps.noncontam <- prune_taxa(contamdf.prev$contaminant, ps)
+
+ps.noncontam <- prune_taxa(!contamdf.prev$contaminant, ps.a)
+ps.b = subset_samples(ps.noncontam, Sample_type != "Control")
+ps.b = subset_samples(ps.b, Sample_type != "Taff's Well PUMPED")
+
+ps.b <- prune_taxa(taxa_sums(ps.b) > 0, ps.b)
+#order months
+sample_data(ps.b)$Month = factor(sample_data(ps.b)$Month, 
+                                 levels = c("April","August","December"))
+
+#to relative abundances
+ps.b = subset_taxa(ps.b, Kingdom %in% c("Archaea", "Bacteria"))
+ps.b = subset_samples(ps.b, Site.name != "Taff's Well PUMPED")
+  
+ps.b.r <-  transform_sample_counts(ps.b, function(x) {x/sum(x)})
+
+ps.b.r.glom <- speedyseq::tax_glom(ps.b.r, taxrank = 'Genus', NArm = FALSE)
+ps.b.r.glom.psdf <- data.table(speedyseq::psmelt(ps.b.r.glom))
+ps.b.r.glom.psdf$Genus <- as.character(ps.b.r.glom.psdf$Genus)
+ps.b.r.glom.psdf$Genus[is.na(ps.b.r.glom.psdf$Genus)] <- "Unclassified"
+
+amp <- as_tibble(ps.b.r.glom.psdf) %>% 
+  select(c("Abundance", "Genus", "Sample_ID", "Site.name", "Month")) %>% 
+  filter(Site.name == "Taff Bargoed") %>% 
+  mutate(Sample_ID = str_replace_all(Sample_ID, "SGG", "SGG_")) %>% 
+  mutate(Abundance = Abundance * 100) %>% 
+  rename(percent = Abundance) %>% 
+  rename(genus = Genus) %>% 
+  rename(month = Month) %>% 
+  rename(sample = Sample_ID) %>% 
+  select(!Site.name) %>%
+  mutate(percent = as.numeric(as.character(percent))) %>%
+  mutate(genus = replace(genus, percent <= 3, "Other <3%"))
+```
+
+```{r}
+amp %<>% add_column(tech = "16S")
+metag %<>% add_column(tech = "Metagenome") 
+
+merged_df = bind_rows(amp, metag)
+```
+### Plot cumulative barcharts for metagenomes and 16S
+
+```{r, fig.height=5, fig.width=7}
+tol13rainbow=c("#882E72", "#B178A6", "#D6C1DE", "#1965B0", "#5289C7", "#7BAFDE", "#4EB265", "#90C987", "#CAE0AB", "#F7EE55", "#F6C141", "#F1932D", "#E8601C")
+
+ggplot(merged_df,
+       aes(x = sample, y = percent, fill = reorder(genus, -percent))) +
+  geom_bar(colour = "black",
+           position = "stack",stat = "identity") +
+  facet_wrap(tech ~ month, scales = "free") +
+  scale_fill_manual(values = tol13rainbow) +
+  ylab("Relative abundance (%)") +
+  theme_bw() +
+#  guides() #
+  theme(axis.text.x = element_text(angle = 30, 
+                                   hjust = 1, vjust = 1),
+        axis.title.x = element_blank(),
+        strip.background = element_rect(fill = "white"),
+        strip.text = element_text(face="bold"))
+```
+
+### Plot heatmap instead of bars
+
+```{r, fig.height=9, fig.width=12}
+sum_merged_df = merged_df %>% 
+         group_by(sample, genus, month, tech) %>%
+         summarise(mean_pc = round(sum(percent), 2)) %>% 
+         convert(num(mean_pc))
+
+ggplot(sum_merged_df,
+    aes(x = sample, y = genus, 
+        fill = as.numeric(reorder(genus, -mean_pc)))) +
+  facet_wrap(tech~month,scales = "free") +
+  geom_tile() +
+  geom_text(data = sum_merged_df %>%
+              filter(mean_pc < 4),
+            aes(x = sample, y = genus,
+                label = mean_pc, fontface = "bold"),
+                colour="black") +
+  geom_text(data = sum_merged_df %>%
+              filter(mean_pc >= 4),
+            aes(x = sample, y = genus,
+                label = mean_pc, fontface = "bold"),
+                colour="white") +
+  scale_fill_gradient("Averaged Relative Abundance (%)",
+                        low = "black", high = "white") +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        # axis.text.x = element_text(size=16,
+        #                            angle = 35, hjust = 1),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size=17),
+        strip.text.x = element_text(face = "bold",
+                                    size = 18),
+        strip.text.y = element_text(face = "bold",
+                                    size = 18),
+        strip.background = element_rect(fill = "white"),
+        legend.text = element_text(size= 18,
+                                   angle = 25,
+                                   hjust = 1,
+                                   vjust = 1),
+        legend.title = element_text(size=18, face="bold"),
+        legend.position = "bottom") +
+  guides(fill = guide_colourbar(title.position = "top",
+                                barwidth = 20))
+```
+
